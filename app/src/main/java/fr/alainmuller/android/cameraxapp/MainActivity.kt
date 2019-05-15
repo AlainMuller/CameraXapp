@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.DisplayMetrics
 import android.util.Log
 import android.util.Rational
 import android.util.Size
@@ -19,6 +20,7 @@ import androidx.camera.core.*
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import fr.alainmuller.android.cameraxapp.utils.AutoFitPreviewBuilder
 import java.io.File
 
 class MainActivity : AppCompatActivity(), LifecycleOwner {
@@ -37,6 +39,9 @@ class MainActivity : AppCompatActivity(), LifecycleOwner {
 
     private lateinit var viewFinder: TextureView
     private lateinit var captureButton: ImageButton
+    private lateinit var toggleCameraButton: ImageButton
+
+    private var lensFacing = CameraX.LensFacing.BACK
 
     // =================================================================================================================
     // Interface AppCompatActivity
@@ -48,6 +53,21 @@ class MainActivity : AppCompatActivity(), LifecycleOwner {
 
         viewFinder = findViewById(R.id.view_finder)
         captureButton = findViewById(R.id.capture_button)
+        toggleCameraButton = findViewById(R.id.toggle_camera)
+
+        // Listener for button used to switch cameras
+        toggleCameraButton.setOnClickListener {
+            lensFacing = if (CameraX.LensFacing.FRONT == lensFacing) {
+                CameraX.LensFacing.BACK
+            } else {
+                CameraX.LensFacing.FRONT
+            }
+            try {
+                startCamera()
+            } catch (exc: Exception) {
+                Log.e(TAG, "Error while switching camera", exc)
+            }
+        }
 
         // Request camera permissions
         if (allPermissionsGranted()) {
@@ -89,16 +109,26 @@ class MainActivity : AppCompatActivity(), LifecycleOwner {
     // =================================================================================================================
 
     private fun startCamera() {
+        // Retrieve screen display metrics to fit preview
+        val metrics = DisplayMetrics().also { viewFinder.display.getRealMetrics(it) }
+        val screenSize = Size(metrics.widthPixels, metrics.heightPixels)
+        val screenAspectRatio = Rational(metrics.widthPixels, metrics.heightPixels)
+        Log.d(TAG, "Metrics: ${metrics.widthPixels} x ${metrics.heightPixels}")
+
         // ~~~ PreviewConfig setup ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         // Create configuration object for the viewfinder use case
         val previewConfig = PreviewConfig.Builder().apply {
-            setTargetAspectRatio(Rational(1, 1))
-            setTargetResolution(Size(640, 640))
+            setLensFacing(lensFacing)
+            // We request a specific resolution matching screen size
+            setTargetResolution(screenSize)
+            // We also provide an aspect ratio in case the exact resolution is not available
+            setTargetAspectRatio(screenAspectRatio)
+            setTargetRotation(viewFinder.display.rotation)
         }.build()
 
         // Build the viewfinder use case
-        val preview = Preview(previewConfig)
+        val preview = AutoFitPreviewBuilder.build(previewConfig, viewFinder)
 
         // Every time the viewfinder is updated, recompute layout
         preview.setOnPreviewOutputUpdateListener {
@@ -115,11 +145,14 @@ class MainActivity : AppCompatActivity(), LifecycleOwner {
 
         // Create configuration object for the image capture use case
         val imageCaptureConfig = ImageCaptureConfig.Builder().apply {
-            setTargetAspectRatio(Rational(1, 1))
-            // We don't set a resolution for image capture; instead, we
-            // select a capture mode which will infer the appropriate
-            // resolution based on aspect ration and requested mode
+            setLensFacing(lensFacing)
+            // We don't set a resolution for image capture; instead, we select a capture mode which will infer the
+            // appropriate resolution based on aspect ratio and requested mode
             setCaptureMode(ImageCapture.CaptureMode.MIN_LATENCY)
+            // We request aspect ratio but no resolution to match preview config but letting
+            // CameraX optimize for whatever specific resolution best fits requested capture mode
+            setTargetAspectRatio(screenAspectRatio)
+            setTargetRotation(viewFinder.display.rotation)
         }.build()
 
         // Build the image capture use case and attach button click listener
